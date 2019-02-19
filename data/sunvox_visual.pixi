@@ -1,0 +1,292 @@
+fn sunvox_visual_init()
+{
+    t_matrix = new( 4, 4, FLOAT )
+    t_p = new( 3, 1, FLOAT )
+        
+    scope_offset = new( 1, 1, INT32 )
+    scope_size = new( 1, 1, INT32 )
+    
+    g_mod_x = new( 256, 1, INT16 )
+    g_mod_y = new( 256, 1, INT16 )
+    g_mod_z = new( 256, 1, INT16 )
+    g_mod_x2 = new( 256, 1, FLOAT )
+    g_mod_y2 = new( 256, 1, FLOAT )
+    g_mod_color = new( 256, 1, PIXEL )
+    g_mod_flags = new( 256, 1, INT )
+    g_mod_amp = new( 256, 1, FLOAT )
+    g_mods = 0
+    g_mods_track = -1
+    
+    halo = load( "data/images/halo.png" )
+    halo2 = load( "data/images/halo2.png" )
+
+    bg_scr = new( xsize div 2, ysize div 2, PIXEL )
+    sv_scr = new( xsize, ysize, PIXEL )
+}
+
+fn draw_antialiased_dot( $x, $y, $color )
+{
+    $t = get_transp()
+    $xx = $x * 256
+    $xc = $xx & 255
+    $yy = $y * 256
+    $yc = $yy & 255
+    $ycc = 255 - $yc
+    $tx1 = 255 - $xc 
+    $tx2 = $xc
+    transp( ( ( ( $tx1 * $ycc ) >> 8 ) * $t ) >> 8 )
+    dot( $x, $y, $color )
+    transp( ( ( ( $tx2 * $ycc ) >> 8 ) * $t ) >> 8 )
+    dot( $x + 1, $y, $color )
+    transp( ( ( ( $tx1 * $yc ) >> 8 ) * $t ) >> 8 )
+    dot( $x, $y + 1, $color )
+    transp( ( ( ( $tx2 * $yc ) >> 8 ) * $t ) >> 8 )
+    dot( $x + 1, $y + 1, $color )
+    transp( $t )
+}
+
+fn draw_line( $x1, $y1, $x2, $y2, $color )
+{
+    $dots = 20
+    $dx = ( $x2 - $x1 ) / $dots
+    $dy = ( $y2 - $y1 ) / $dots
+    $x = $x1 + $dx * ( t % 1000 ) / 1000
+    $y = $y1 + $dy * ( t % 1000 ) / 1000
+    $d = 0 while( $d < $dots )
+    {
+	//v = scope[ ( offset + $d * 2 ) & size_mask ]
+	//if v < 0 { v = 0 }
+	//transp( v * 512 )
+	draw_antialiased_dot( $x, $y, $color )
+	$x + $dx
+	$y + $dy
+	$d + 1
+    }
+}
+
+t_reset()
+t_rotate( t / 500, 0, 1, 0 )
+t_get_matrix( t_matrix )
+t_reset()
+
+transp( 256 )
+
+set_screen( bg_scr )
+pixi( sv_scr, 0, 0, WHITE, 0.5, 0.5 )
+effector( EFF_HBLUR, xsize div 2 )
+effector( EFF_VBLUR, ysize div 4 )
+transp( 42 )
+clear( BLACK )
+transp( 256 )
+
+set_screen( sv_scr )
+
+//effector( EFF_HBLUR, xsize )
+//effector( EFF_VBLUR, ysize )
+//transp( 50 )
+//clear( BLACK )
+pixi( bg_scr, 0, 0, WHITE, 2, 2 )
+
+transp( 256 )
+
+if cur_track != g_mods_track
+{
+    rand_seed( cur_track * 33 )
+    g_mods_track = cur_track
+    g_mods = 0
+    mods = dlcall( svl, sv_get_number_of_modules, 0 )
+    i = 0 while( i < mods )
+    {
+	flags = dlcall( svl, sv_get_module_flags, 0, i )
+	g_mod_flags[ g_mods ] = flags
+	if flags & SV_MODULE_FLAG_EXISTS 
+	{
+	    col = dlcall( svl, sv_get_module_color, 0, i )
+	    col = get_color( col & 255, ( col >> 8 ) & 255, ( col >> 16 ) & 255 )
+	    x = dlcall( svl, sv_get_module_xy, 0, i )
+	    y = x >> 16
+	    x & 0xFFFF
+	    x = ( ( x * xsize ) div 1024 ) - hxsize
+	    y = ( ( y * ysize ) div 1024 ) - hysize
+	    g_mod_x[ g_mods ] = x
+	    g_mod_y[ g_mods ] = y
+	    g_mod_z[ g_mods ] = ( rand() % xsize ) - hxsize
+	    g_mod_color[ g_mods ] = col
+	    g_mod_amp[ g_mods ] = 0
+	}
+	g_mods + 1
+	i + 1
+    }
+}
+
+i = 0 while( i < g_mods )
+{
+    t_p[ 0 ] = g_mod_x[ i ] 
+    t_p[ 1 ] = g_mod_y[ i ] 
+    t_p[ 2 ] = g_mod_z[ i ]
+    t_point( t_p, t_matrix )
+    g_mod_x2[ i ] = t_p[ 0 ]
+    g_mod_y2[ i ] = t_p[ 1 ]
+    i + 1
+}
+
+i = 0 while( i < g_mods )
+{
+    col = g_mod_color[ i ]
+    flags = g_mod_flags[ i ]
+    x = g_mod_x2[ i ]
+    y = g_mod_y2[ i ]
+
+    if flags & SV_MODULE_FLAG_EXISTS
+    {	
+	scope_amp = 0
+	scope = dlcall( svl, sv_get_module_scope, 0, i, 0, scope_offset, scope_size )
+	if scope >= 0
+	{
+    	    if g_sv_stype == SV_STYPE_FLOAT32	
+	    {
+		offset = scope_offset[ 0 ]
+		size = scope_size[ 0 ]
+		resize( scope, size, 1, FLOAT32 )
+		size_mask = size - 1
+		size = 256
+		sstep = 8
+		scope_amp = 0
+		sp = 0 while( sp < size )
+		{
+		    v = scope[ ( offset + sp ) & size_mask ]
+		    if v < 0 { v = -v }
+		    if v > scope_amp { scope_amp = v }
+		    sp + sstep
+		}
+		if i == 0 
+		{
+		    transp( 256 )
+		    scope_amp / 2
+		}
+		if pause_mode
+		{
+		    scope_amp = 0
+		}
+		scope_amp * tracks_visual_gain[ cur_track ] 
+		if scope_amp < g_mod_amp[ i ]
+		{
+		    scope_amp = ( scope_amp + g_mod_amp[ i ] ) / 2
+		}
+		g_mod_amp[ i ] = scope_amp
+		transp( 256 )
+		h = scope_amp
+		if h > 0.6 { h = 0.6 }
+		
+		t_reset()
+		t_translate( x, y, 0 )
+		t_rotate( t / 50 + i, 0, 0, 1 )
+		pixi( halo, 0, 0, col, h, h )
+		t_reset()
+		
+		if scope_amp > 0.0001 
+		{
+		    pixi( halo, x, y, WHITE, 0.03, 0.03 ) 
+
+		    $t = scope_amp * 512
+		    if $t > 256 { $t = 256 }
+		    transp( $t  - 180 )
+		    pixi( halo, x, y, col, scope_amp * 5, scope_amp / 32 )
+
+		    name = dlcall( svl, sv_get_module_name, 0, i )
+		    if name >= 0 
+		    {
+			$xx = x * 256
+			$xc = $xx & 255
+			transp( ( $t * ( 255 - $xc ) ) >> 8 )
+			print( name, x, y - 1, col, BOTTOM )
+			transp( ( $t * $xc ) >> 8 )
+			print( name, x + 1, y - 1, col, BOTTOM )
+			transp( 256 )
+			remove( name )
+		    }
+
+		    $t = scope_amp * 512 - 200
+		    $t / 8
+		    if $t > 64 { $t = 64 }
+		    transp( $t )
+		
+		    t_reset()
+    		    t_translate( x, y, 0 )
+		    t_rotate( -t / ( 100 + i * 2 ) - i, 0, 0, 1 )
+		    pixi( halo2, 0, 0, col, 1, 1 )
+		    t_reset()
+		    
+		    //Links:
+		    links_num = ( flags & SV_MODULE_OUTPUTS_MASK ) >> SV_MODULE_OUTPUTS_OFF
+		    if links_num > 0 && scope_amp > 0.0001
+		    {
+			links = dlcall( svl, sv_get_module_outputs, 0, i )
+			if links >= 0
+			{
+			    resize( links, links_num, 1, INT32 ) //Make 32bit array
+			    l = 0 while( l < links_num )
+			    {
+				i2 = links[ l ]
+				flags2 = g_mod_flags[ i2 ]
+				if flags2 & SV_MODULE_FLAG_EXISTS
+				{
+				    x2 = g_mod_x2[ i2 ]
+				    y2 = g_mod_y2[ i2 ]
+			
+				    transp( scope_amp * 270 )
+				    draw_line( x, y, x2, y2, col )
+				    transp( 256 )
+				}
+				l + 1
+			    }
+			    remove( links )
+			}
+		    } 
+
+		}
+	    }
+	    remove( scope )
+	}
+    }	
+    i + 1
+}
+
+set_screen( scr )
+copy( scr, sv_scr )
+
+//
+// Bottom scope:
+//
+
+if 0 
+{
+
+scope = dlcall( svl, sv_get_module_scope, 0, 0, 0, scope_offset, scope_size )
+if scope >= 0
+{
+    if g_sv_stype == SV_STYPE_FLOAT32	
+    {
+	transp( 32 )
+	offset = scope_offset[ 0 ]
+        size = scope_size[ 0 ]
+        resize( scope, size, 1, FLOAT32 )
+        size_mask = size - 1
+        size = 256
+        i = 0 while( i < size )
+        {
+    	    v = scope[ ( offset + i ) & size_mask ]
+    	    if v < 0 { v = -v }
+    	    v * char_ysize * 5
+    	    x = -hxsize + i * 2
+    	    y = yy - char_ysize * 1.5 - v / 2
+    	    transp( ( (x+hxsize) * 64 ) / xsize )
+    	    fbox( x, y, 1, v, c )
+    	    if x >= hxsize { i = 999999 }
+    	    i + 1
+        }
+    }
+    remove( scope )
+}
+
+}

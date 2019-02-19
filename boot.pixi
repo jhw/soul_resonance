@@ -1,0 +1,348 @@
+playlist = new( 32, 1, INT )
+tracks_visual_gain = new( 32, 1, FLOAT )
+clean( tracks_visual_gain, 1 )
+tracks = 0
+cur_track = 0
+playlist[ tracks ] = "color_dreams.sunvox" tracks + 1
+playlist[ tracks ] = "voices_of_spring.sunvox" tracks + 1
+playlist[ tracks ] = "endless_fantasy.sunvox" tracks + 1
+playlist[ tracks ] = "six_steps.sunvox" tracks_visual_gain[ tracks ] = 1.2 tracks + 1
+playlist[ tracks ] = "sea_breeze.sunvox" tracks_visual_gain[ tracks ] = 2 tracks + 1
+playlist[ tracks ] = "music_of_the_rain.sunvox" tracks_visual_gain[ tracks ] = 0.9 tracks + 1
+playlist[ tracks ] = "eburg_after_the_rain.sunvox" tracks_visual_gain[ tracks ] = 1.1 tracks + 1
+playlist[ tracks ] = "siberian_beauty.sunvox" tracks + 1
+playlist[ tracks ] = "full_moon_night.sunvox" tracks + 1
+playlist[ tracks ] = "time_flow.sunvox" tracks + 1
+playlist[ tracks ] = "autumn.sunvox" tracks_visual_gain[ tracks ] = 2 tracks + 1
+playlist[ tracks ] = "tales.sunvox" tracks + 1
+playlist[ tracks ] = "lullaby.sunvox" tracks_visual_gain[ tracks ] = 1.1 tracks + 1
+playlist[ tracks ] = -1
+
+SUNVOX_LIB_WIN32 = "data/lib/windows/lib_x86/sunvox.dll"
+SUNVOX_LIB_LINUX_X86 = "data/lib/linux/lib_x86/sunvox.so"
+SUNVOX_LIB_LINUX_X86_64 = "data/lib/linux/lib_x86_64/sunvox.so"
+SUNVOX_LIB_OSX_X86_64 = "data/lib/osx/lib_x86_64/sunvox.dylib"
+include "data/sunvox.pixi"
+
+scr = get_screen()
+resize( scr, 480, 320 )
+xsize = get_xsize( scr )
+ysize = get_ysize( scr )
+hxsize = xsize div 2
+hysize = ysize div 2
+
+font = load( "data/images/font.png" )
+if font >= 0 
+{
+    set_font( 32, font, 16, 6 )
+    char_xsize = get_xsize( font ) div 16
+    char_ysize = get_ysize( font ) div 6
+    set_key_color( font, BLACK )
+}
+
+fn c_string( $str )
+{
+    $slen = strlen( $str )
+    resize( $str, $slen + 1, 1 )
+    $str[ $slen ] = 0
+    ret( $str )
+}
+
+song_name = -1
+song_volume = 100
+fn load_track()
+{
+    pause_mode = 0
+    ts = "" sprintf( ts, "%s/data/music/%s", CURRENT_PATH, playlist[ cur_track ] )
+    dlcall( svl, sv_load, 0, c_string( ts ) )
+    dlcall( svl, sv_play, 0 )
+    song_cur_frame = 0
+    dlcall( svl, sv_set_autostop, 0, 1 )
+    remove( song_name )
+    song_name = dlcall( svl, sv_get_song_name, 0 )
+    if song_name >= 0
+    {
+	len = strlen( song_name )
+	i = 0 while( i < len )
+	{
+	    if song_name[ i ] == '.'
+	    {
+		song_name[ i ] = 0
+		i = 999999
+	    }
+	    i + 1
+	}
+    }
+    song_bpm = dlcall( svl, sv_get_song_bpm, 0 )
+    song_tpl = dlcall( svl, sv_get_song_tpl, 0 )
+    song_frames = dlcall( svl, sv_get_song_length_frames, 0 )
+    song_lines = dlcall( svl, sv_get_song_length_lines, 0 )
+}
+
+fn audio_callback( $stream, $userdata, $channels, $frames, $out_time, $in_channels, $latency )
+{
+    if pause_mode
+    {
+	clean( $channels[ 0 ] )
+	clean( $channels[ 1 ] )
+    }
+    else
+    {
+	$cur_t = get_ticks()
+	$cur_sv_t = dlcall( svl, sv_get_ticks )
+	$delay = ( $out_time - $cur_t ) & 0xFFFFFFFF //Use 32bit mask, because all time values are 32bit
+	$sv_delay = ( $delay * g_sv_tps ) div g_tps
+	dlcall( svl, sv_audio_callback, g_audio_buf, $frames, $latency, $cur_sv_t + $sv_delay )
+	song_cur_frame + $frames
+	if rewind_mode
+	{
+	    envelope2p( g_audio_buf, 32768, 0, 0, $frames * 2 )
+	    dlcall( svl, sv_audio_callback, g_audio_buf2, $frames, $latency, $cur_sv_t + $sv_delay )
+	    dlcall( svl, sv_audio_callback, g_audio_buf2, $frames, $latency, $cur_sv_t + $sv_delay )
+	    dlcall( svl, sv_audio_callback, g_audio_buf2, $frames, $latency, $cur_sv_t + $sv_delay )
+	    envelope2p( g_audio_buf2, 0, 32768, 0, $frames * 2 )
+	    op_cc( OP_ADD, g_audio_buf, g_audio_buf2, 0, $frames * 2 )
+	    song_cur_frame + $frames * 3
+	}
+	if song_volume != 100
+	{
+	    op_cn( OP_MUL, g_audio_buf, song_volume / 100, 0, $frames * 2 )
+	}
+	copy( $channels[ 0 ], g_audio_buf, 0, 0, $frames, 1, 2 )
+	copy( $channels[ 1 ], g_audio_buf, 0, 1, $frames, 1, 2 )
+    }
+    ret( 1 )
+}
+
+fn main_init()
+{
+    descr_t = t
+    show_descr = 1
+    prev_volume = song_volume
+    DESCR_T1 = 2000
+    DESCR_T2 = 11000
+    zoom_scr = -1
+}
+
+fn show_text()
+{
+    descr_ysize = char_ysize * 17
+    descr_text = "Control keys:
+ LEFT or [      - previous track
+ RIGHT or ]     - next track
+ UP or +        - volume up
+ DOWN or -      - volume down
+ ENTER          - rewind
+ SPACE          - pause
+ ESCAPE         - exit
+ TAP THE SCREEN - show this text
+ 
+Created in SunVox and Pixilang:
+warmplace.ru/soft/sunvox
+warmplace.ru/soft/pixilang
+ 
+Please make a donation:
+warmplace.ru/donate"
+
+    transp( 256 )
+    album_name_len = 14
+    c = #FFFFFF
+    len = song_frames div 44100
+    cur = song_cur_frame div 44100
+    xx = -hxsize + char_xsize + 1
+    yy = hysize - char_xsize
+    if show_descr
+    {
+	$t = t - descr_t
+        if $t < DESCR_T1
+	{
+	}
+	if $t >= DESCR_T1 && $t < DESCR_T2
+        {
+	    $t = DESCR_T1
+        }
+        if $t >= DESCR_T2
+	{
+	    $t = DESCR_T1 - ( $t - DESCR_T2 )
+	    if $t < 0
+    	    {
+    		$t = 0
+        	show_descr = 0
+            }
+	}
+        yy - ( descr_ysize * $t ) / DESCR_T1
+        //transp( ( $t * 128 ) / DESCR_T1 )
+        //clear( BLACK )
+        //transp( 256 )
+    }
+    ts = "" sprintf( ts,
+"
+Soul Resonance   %02d %s
+ ", cur_track + 1, song_name )
+    print( ts, xx, yy, c, LEFT | BOTTOM )
+    transp( 100 )
+    print(
+"NightRadio:    #
+               #
+               #", xx, yy, c, LEFT | BOTTOM )
+    transp( 256 )
+    fbox( xx, yy - char_ysize, ( album_name_len * char_xsize * cur ) / len, char_ysize - 1, c )
+    print( descr_text, xx, yy + char_ysize, YELLOW, LEFT | TOP )
+
+    if prev_volume != song_volume
+    {
+	volume_t = t
+        show_vol = 1
+	prev_volume = song_volume
+    }
+    if show_vol
+    {
+	if t - volume_t < 2000
+        {
+	    transp( 256 - ( ( ( t - volume_t ) / 2000 ) * 256 ) )
+    	    ts = "" sprintf( ts, "Volume %d%%", song_volume )
+	    print( ts, xx, -hysize + char_xsize, c, LEFT | TOP )
+	    transp( 256 )
+        }
+	else
+	{
+    	    show_vol = 0
+	}
+    }
+}
+
+if sv_load_dll() == -1 { exit( -1 ) }
+
+ver = dlcall( svl, sv_init, -1, 44100, 2, SV_INIT_FLAG_USER_AUDIO_CALLBACK | SV_INIT_FLAG_AUDIO_FLOAT32 )
+if( ver >= 0 )
+{
+    major = ( ver >> 16 ) & 255;
+    minor1 = ( ver >> 8 ) & 255;
+    minor2 = ( ver ) & 255;
+    ts = "" sprintf( ts, "SunVox lib version: %d.%d.%d\n", major, minor1, minor2 ) fputs( ts )
+
+    g_tps = get_tps()
+    g_sv_tps = dlcall( svl, sv_get_ticks_per_second )
+    g_sv_stype = dlcall( svl, sv_get_sample_type )
+
+    g_audio_buf = new( 16000, 1, FLOAT32 )
+    g_audio_buf2 = new( 16000, 1, FLOAT32 )
+    set_audio_callback( audio_callback, 0, 44100, FLOAT32, 2, AUDIO_FLAG_INTERP2 )
+
+    dlcall( svl, sv_open_slot, 0 )
+
+    load_track()
+    sunvox_visual_init()
+    start_timer( 0 )
+    gfx_break = 0
+    while( gfx_break == 0 )
+    {    
+	t = get_timer( 0 )
+	if main_init_flag == 0
+	{
+	    main_init()
+	    main_init_flag = 1
+	}
+        
+    	if WINDOW_XSIZE >= xsize * 2 && WINDOW_YSIZE >= ysize * 2
+    	{
+    	    if zoom_scr == -1
+    	    {
+    	        zoom_scr = new( xsize * 2, ysize * 2, PIXEL )
+    	    }
+    	}
+    	else
+    	{
+    	    if zoom_scr >= 0
+    	    {
+    		remove( zoom_scr )
+    		zoom_scr = -1
+    	    }
+        }
+	
+	include "data/sunvox_visual.pixi"
+	
+	show_text()
+	
+	while( get_event() ) 
+	{
+	    if EVT[ EVT_TYPE ] == EVT_BUTTONDOWN 
+    	    {
+    		key = EVT[ EVT_KEY ]
+        	if key == KEY_UP || key == '=' { song_volume + 10 }
+        	if key == KEY_DOWN || key == '-' { if song_volume >= 10 { song_volume - 10 } }
+        	if key == KEY_RIGHT || key == '[' { cur_track + 1 cur_track % tracks load_track() }
+        	if key == KEY_LEFT || key == ']' { cur_track - 1 if cur_track < 0 { cur_track + tracks } load_track() }
+        	if key == KEY_ENTER { rewind_mode = 8 }
+        	if key == ' ' { pause_mode ^ 1 }
+    	    } 
+    	    if EVT[ EVT_TYPE ] == EVT_MOUSEBUTTONDOWN 
+    	    { 
+    		if show_descr == 0
+    		{
+    		    show_descr = 1
+    		    descr_t = t
+    		}
+    		else
+    		{
+    		    $t = t - descr_t
+    		    if $t >= DESCR_T1 && $t < DESCR_T2
+    		    {
+    			descr_t = t - DESCR_T1
+	            }
+	            else
+	            {
+	        	if $t > DESCR_T2
+	        	{
+	        	    descr_t = t - ( DESCR_T1 - ( $t - DESCR_T2 ) )
+	        	}
+	            }
+    		}
+    	    }
+	    if EVT[ EVT_TYPE ] == EVT_QUIT { gfx_break = 1 } 
+	}
+
+	if rewind_mode >= 1 { rewind_mode - 1 }
+	if dlcall( svl, sv_end_of_song, 0 )
+	{
+	    //Go to the next track:
+	    cur_track + 1
+	    cur_track % tracks
+	    load_track()
+	}
+	
+	if 0
+	{
+	    ts = ""
+	    sprintf( ts, "FPS:%u", FPS )
+    	    print( ts, -get_xsize( scr ) / 2 + 8, -get_ysize( scr ) / 2 + 8, WHITE, TOP | LEFT )
+    	}
+    	
+    	if next_frame
+        {
+            tt = ( get_ticks() - frame_t ) & 0xFFFFFFFF
+            delay = 1000 / 32 - ( tt / get_tps() ) * 1000
+            if delay > 0 { sleep( delay ) }
+        }
+        frame_t = get_ticks()
+        next_frame = 1
+    	if zoom_scr >= 0
+    	{
+    	    transp( 256 )
+    	    set_screen( zoom_scr )
+    	    pixi( scr, 0, 0, WHITE, 2, 2 )
+    	    frame()
+    	    set_screen( scr )
+    	}
+    	else
+    	{
+	    frame()
+	}
+    }
+
+    dlcall( svl, sv_close_slot, 0 )
+    set_audio_callback( -1 )
+    dlcall( svl, sv_deinit )
+}
+
+sv_unload_dll()
